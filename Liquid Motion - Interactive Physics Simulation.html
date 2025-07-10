@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Liquid Motion - Interactive Physics Simulation</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+            cursor: none;
+            transition: background 0.5s ease;
+        }
+
+        /* Dark mode styles */
+        .dark-mode {
+            background: #111;
+        }
+
+        /* Light mode styles */
+        .light-mode {
+            background: #f5f5f5;
+        }
+
+        /* Custom cursor styling */
+        #cursor {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            pointer-events: none;
+            transform: translate(-50%, -50%);
+            z-index: 100;
+            transition: transform 0.1s ease;
+        }
+
+        .dark-mode #cursor {
+            background: rgba(255, 255, 255, 0.8);
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+
+        .light-mode #cursor {
+            background: rgba(0, 0, 0, 0.8);
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Droplet element styling */
+        .droplet {
+            position: absolute;
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 90;
+            transform-origin: center center;
+            filter: blur(0.5px);
+            transition: transform 0.2s ease-out;
+        }
+
+        .dark-mode .droplet {
+            background: rgba(255, 255, 255, 0.9);
+            box-shadow: 0 0 5px rgba(255, 255, 255, 0.7);
+        }
+
+        .light-mode .droplet {
+            background: rgba(0, 0, 0, 0.9);
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.7);
+        }
+
+        /* Splash effect styling */
+        .splash {
+            position: absolute;
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 80;
+            opacity: 0;
+            transform: scale(0);
+        }
+
+        .dark-mode .splash {
+            background: radial-gradient(circle, rgba(255,255,255,0.8) 0%, rgba(255,255,255,0) 70%);
+        }
+
+        .light-mode .splash {
+            background: radial-gradient(circle, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0) 70%);
+        }
+
+        /* Theme toggle button */
+        #mode-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 8px 15px;
+            border-radius: 20px;
+            border: none;
+            font-weight: bold;
+            cursor: pointer;
+            z-index: 1000;
+        }
+
+        .dark-mode #mode-toggle {
+            background: rgba(255, 255, 255, 0.2);
+            color: #fff;
+            border: 1px solid #fff;
+        }
+
+        .light-mode #mode-toggle {
+            background: rgba(0, 0, 0, 0.2);
+            color: #000;
+            border: 1px solid #000;
+        }
+
+        /* Information panel */
+        #info {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #fff;
+            font-family: Arial, sans-serif;
+            text-align: center;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 20px;
+            border-radius: 20px;
+            border: 1px solid #fff;
+        }
+
+        .light-mode #info {
+            color: #000;
+            background: rgba(255, 255, 255, 0.7);
+            border: 1px solid #000;
+        }
+    </style>
+</head>
+<body class="dark-mode">
+    <button id="mode-toggle">Light Mode</button>
+    <div id="cursor"></div>
+    <div id="info">Move your mouse to create liquid droplets</div>
+
+    <script>
+        // Wait for DOM to be fully loaded before executing JavaScript
+        document.addEventListener('DOMContentLoaded', () => {
+            // Get DOM elements
+            const body = document.body;
+            const cursor = document.getElementById('cursor');
+            const modeToggle = document.getElementById('mode-toggle');
+            
+            // Mouse position tracking variables
+            let mouseX = window.innerWidth / 2;
+            let mouseY = window.innerHeight / 2;
+            let lastMouseX = mouseX;
+            let lastMouseY = mouseY;
+            
+            // Arrays to store droplet and splash elements
+            let droplets = [];
+            let splashes = [];
+            
+            // Animation control variables
+            let lastDropTime = 0;
+            let isLightMode = false;
+            let animationId = null;
+            let isMouseMoving = false;
+            let mouseSpeed = 0;
+
+            // Physics configuration object
+            const physicsConfig = {
+                gravity: 0.2,           // Strength of gravity
+                friction: 0.98,         // Air resistance/friction
+                bounce: 0.7,            // Bounce coefficient (0-1)
+                viscosity: 0.95,        // Liquid viscosity (0.9-1)
+                dropInterval: 50,       // Milliseconds between droplet creation
+                maxDrops: 100,          // Maximum number of simultaneous drops
+                minDropSize: 3,         // Minimum droplet size in pixels
+                maxDropSize: 10,        // Maximum droplet size in pixels
+                mouseSpeedThreshold: 2, // Minimum mouse speed to create drops
+                splashSize: 20,         // Base splash size multiplier
+                wallDamping: 0.8        // Speed reduction when hitting walls
+            };
+
+            // Theme toggle event listener
+            modeToggle.addEventListener('click', () => {
+                isLightMode = !isLightMode;
+                body.classList.toggle('dark-mode', !isLightMode);
+                body.classList.toggle('light-mode', isLightMode);
+                modeToggle.textContent = isLightMode ? 'Dark Mode' : 'Light Mode';
+                
+                // Update colors of existing droplets
+                updateExistingDroplets();
+            });
+
+            // Mouse movement tracking
+            document.addEventListener('mousemove', (e) => {
+                // Update cursor position
+                mouseX = e.clientX;
+                mouseY = e.clientY;
+                cursor.style.left = mouseX + 'px';
+                cursor.style.top = mouseY + 'px';
+                
+                // Calculate mouse speed based on movement delta
+                const dx = mouseX - lastMouseX;
+                const dy = mouseY - lastMouseY;
+                mouseSpeed = Math.sqrt(dx * dx + dy * dy);
+                
+                // Create new droplets if mouse moves fast enough and cooldown has passed
+                const currentTime = performance.now();
+                if (mouseSpeed > physicsConfig.mouseSpeedThreshold && 
+                    currentTime - lastDropTime > physicsConfig.dropInterval) {
+                    createDroplets(mouseX, mouseY, dx, dy);
+                    lastDropTime = currentTime;
+                }
+                
+                // Store current position for next movement calculation
+                lastMouseX = mouseX;
+                lastMouseY = mouseY;
+                isMouseMoving = true;
+            });
+
+            // Mouse leave/enter detection
+            document.addEventListener('mouseleave', () => {
+                isMouseMoving = false;
+            });
+
+            document.addEventListener('mouseenter', () => {
+                isMouseMoving = true;
+            });
+
+            /**
+             * Creates droplet elements at specified position with initial velocity
+             * @param {number} x - X coordinate of droplet origin
+             * @param {number} y - Y coordinate of droplet origin
+             * @param {number} dx - X velocity component from mouse movement
+             * @param {number} dy - Y velocity component from mouse movement
+             */
+            function createDroplets(x, y, dx, dy) {
+                // Remove oldest droplets if we've reached maximum count
+                while (droplets.length > physicsConfig.maxDrops) {
+                    const drop = droplets.shift();
+                    drop.element.remove();
+                }
+                
+                // Determine number of droplets based on mouse speed
+                const dropCount = Math.min(Math.floor(mouseSpeed / 5), 5);
+                
+                // Create each droplet
+                for (let i = 0; i < dropCount; i++) {
+                    // Random size within configured range
+                    const size = Math.random() * 
+                        (physicsConfig.maxDropSize - physicsConfig.minDropSize) + 
+                        physicsConfig.minDropSize;
+                    
+                    // Random position offset near mouse
+                    const offsetX = (Math.random() - 0.5) * 20;
+                    const offsetY = (Math.random() - 0.5) * 20;
+                    
+                    // Initial velocity based on mouse movement with some randomness
+                    const speedX = dx * 0.2 + (Math.random() - 0.5) * 2;
+                    const speedY = dy * 0.2 + (Math.random() - 0.5) * 2;
+                    
+                    // Create droplet element
+                    const droplet = document.createElement('div');
+                    droplet.className = 'droplet';
+                    droplet.style.width = size + 'px';
+                    droplet.style.height = size + 'px';
+                    droplet.style.left = (x + offsetX) + 'px';
+                    droplet.style.top = (y + offsetY) + 'px';
+                    droplet.style.opacity = '0';
+                    document.body.appendChild(droplet);
+                    
+                    // Fade-in animation
+                    setTimeout(() => {
+                        droplet.style.transition = 'opacity 0.3s ease-out';
+                        droplet.style.opacity = '0.9';
+                    }, 10);
+                    
+                    // Store droplet data in array
+                    droplets.push({
+                        element: droplet,
+                        x: x + offsetX,
+                        y: y + offsetY,
+                        size: size,
+                        speedX: speedX,
+                        speedY: speedY,
+                        originalSize: size,
+                        life: 200 + Math.random() * 300, // Total lifespan
+                        currentLife: 100,                // Current remaining life
+                        wobblePhase: Math.random() * Math.PI * 2 // Wobble animation phase
+                    });
+                }
+            }
+
+            /**
+             * Creates splash effect at specified position
+             * @param {number} x - X coordinate of splash center
+             * @param {number} y - Y coordinate of splash center
+             * @param {number} size - Base size of splash (scaled from droplet size)
+             */
+            function createSplash(x, y, size) {
+                const splash = document.createElement('div');
+                splash.className = 'splash';
+                splash.style.width = size * 2 + 'px';
+                splash.style.height = size * 2 + 'px';
+                splash.style.left = x + 'px';
+                splash.style.top = y + 'px';
+                document.body.appendChild(splash);
+                
+                splashes.push(splash);
+                
+                // Splash animation sequence
+                setTimeout(() => {
+                    splash.style.transition = 'all 0.4s ease-out';
+                    splash.style.opacity = '0.8';
+                    splash.style.transform = 'scale(1.5)';
+                    
+                    // Fade out and remove after animation completes
+                    setTimeout(() => {
+                        splash.style.opacity = '0';
+                        setTimeout(() => {
+                            splash.remove();
+                            splashes = splashes.filter(s => s !== splash);
+                        }, 400);
+                    }, 400);
+                }, 10);
+            }
+
+            /**
+             * Updates existing droplets to match current theme
+             */
+            function updateExistingDroplets() {
+                droplets.forEach(drop => {
+                    drop.element.className = 'droplet';
+                });
+                
+                splashes.forEach(splash => {
+                    splash.className = 'splash';
+                });
+            }
+
+            /**
+             * Main animation loop that updates all physics
+             */
+            function animateDroplets() {
+                const currentTime = performance.now();
+                
+                // Update all droplets
+                for (let i = 0; i < droplets.length; i++) {
+                    const drop = droplets[i];
+                    
+                    // Apply gravity
+                    drop.speedY += physicsConfig.gravity;
+                    
+                    // Apply viscosity (liquid friction)
+                    drop.speedX *= physicsConfig.viscosity;
+                    drop.speedY *= physicsConfig.viscosity;
+                    
+                    // Update position
+                    drop.x += drop.speedX;
+                    drop.y += drop.speedY;
+                    
+                    // Check for wall collisions
+                    let bounced = false;
+                    
+                    // Left wall collision
+                    if (drop.x - drop.size / 2 < 0) {
+                        drop.x = drop.size / 2;
+                        drop.speedX = -drop.speedX * physicsConfig.bounce * physicsConfig.wallDamping;
+                        bounced = true;
+                    }
+                    
+                    // Right wall collision
+                    if (drop.x + drop.size / 2 > window.innerWidth) {
+                        drop.x = window.innerWidth - drop.size / 2;
+                        drop.speedX = -drop.speedX * physicsConfig.bounce * physicsConfig.wallDamping;
+                        bounced = true;
+                    }
+                    
+                    // Top wall collision
+                    if (drop.y - drop.size / 2 < 0) {
+                        drop.y = drop.size / 2;
+                        drop.speedY = -drop.speedY * physicsConfig.bounce * physicsConfig.wallDamping;
+                        bounced = true;
+                    }
+                    
+                    // Bottom wall collision
+                    if (drop.y + drop.size / 2 > window.innerHeight) {
+                        drop.y = window.innerHeight - drop.size / 2;
+                        drop.speedY = -drop.speedY * physicsConfig.bounce * physicsConfig.wallDamping;
+                        bounced = true;
+                        
+                        // Create splash effect when hitting bottom with enough force
+                        if (Math.abs(drop.speedY) > 1) {
+                            createSplash(drop.x, window.innerHeight - drop.size / 2, drop.size);
+                        }
+                    }
+                    
+                    // Apply natural wobble effect when not bouncing
+                    if (!bounced) {
+                        const wobbleIntensity = Math.min(
+                            Math.sqrt(drop.speedX * drop.speedX + drop.speedY * drop.speedY) * 0.5, 
+                            3
+                        );
+                        const wobble = Math.sin(currentTime * 0.01 + drop.wobblePhase) * wobbleIntensity;
+                        
+                        // Animate droplet shape based on movement
+                        drop.element.style.transform = `scale(${1 + wobble * 0.1}, ${1 - wobble * 0.1})`;
+                        drop.element.style.borderRadius = `${50 + wobble * 10}%`;
+                    }
+                    
+                    // Update element position
+                    drop.element.style.left = drop.x + 'px';
+                    drop.element.style.top = drop.y + 'px';
+                    
+                    // Decrement life
+                    drop.currentLife -= 1;
+                    
+                    // Fade out as life decreases
+                    if (drop.currentLife < 30) {
+                        drop.element.style.opacity = (drop.currentLife / 30) * 0.9;
+                    }
+                    
+                    // Remove droplet when life reaches zero
+                    if (drop.currentLife <= 0) {
+                        drop.element.remove();
+                        droplets.splice(i, 1);
+                        i--;
+                    }
+                }
+                
+                // Continue animation loop
+                animationId = requestAnimationFrame(animateDroplets);
+            }
+
+            // Handle window resize
+            function resize() {
+                cursor.style.left = mouseX + 'px';
+                cursor.style.top = mouseY + 'px';
+            }
+
+            window.addEventListener('resize', resize);
+            
+            // Start animation loop
+            animateDroplets();
+        });
+    </script>
+</body>
+</html>
